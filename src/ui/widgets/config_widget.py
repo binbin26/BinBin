@@ -1,11 +1,12 @@
 """
 Widget cấu hình tham số cho thuật toán (SA và PSO).
-Hỗ trợ chọn thuật toán, chỉnh tham số riêng biệt và Import dữ liệu.
+Hỗ trợ chọn thuật toán, chỉnh tham số riêng biệt, Import dữ liệu.
+Thêm: Cấu hình khoảng thời gian xếp lịch và các ràng buộc giám thị.
 """
 
 from PyQt5.QtWidgets import (QVBoxLayout, QFormLayout, QHBoxLayout, 
-                             QStackedWidget, QWidget, QGroupBox)
-from PyQt5.QtCore import Qt, pyqtSignal
+                             QStackedWidget, QWidget, QGroupBox, QDateEdit, QLabel, QSpinBox)
+from PyQt5.QtCore import Qt, pyqtSignal, QDate
 from qfluentwidgets import (
     CardWidget, SpinBox, DoubleSpinBox, ComboBox, 
     StrongBodyLabel, BodyLabel, PushButton, PrimaryPushButton,
@@ -60,7 +61,71 @@ class ConfigWidget(CardWidget):
         
         main_layout.addSpacing(10)
         
-        # --- 2. ALGORITHM SELECTION ---
+        # --- 2. DATE & TIME RANGE CONFIGURATION ---
+        date_group = QGroupBox("📅 Cấu hình Khoảng Thời Gian Xếp Lịch")
+        date_layout = QFormLayout(date_group)
+        date_layout.setSpacing(15)
+        date_layout.setLabelAlignment(Qt.AlignRight)
+        
+        # Ngày bắt đầu
+        self.start_date = QDateEdit()
+        self.start_date.setDate(QDate.currentDate())
+        self.start_date.setCalendarPopup(True)
+        self.start_date.setToolTip("Ngày bắt đầu kỳ thi")
+        date_layout.addRow(BodyLabel("Ngày bắt đầu:"), self.start_date)
+        
+        # Ngày kết thúc
+        self.end_date = QDateEdit()
+        self.end_date.setDate(QDate.currentDate().addDays(30))
+        self.end_date.setCalendarPopup(True)
+        self.end_date.setToolTip("Ngày kết thúc kỳ thi")
+        date_layout.addRow(BodyLabel("Ngày kết thúc:"), self.end_date)
+        
+        # Kết nối sự kiện để validation
+        self.start_date.dateChanged.connect(self._on_date_changed)
+        self.end_date.dateChanged.connect(self._on_date_changed)
+        
+        # Label trạng thái ngày
+        self.date_status_label = BodyLabel("✓ Hợp lệ")
+        self.date_status_label.setStyleSheet("color: green; font-size: 9pt")
+        date_layout.addRow("", self.date_status_label)
+        
+        main_layout.addWidget(date_group)
+        
+        # --- 3. PROCTOR CONSTRAINTS ---
+        constraint_group = QGroupBox("👨‍🏫 Ràng Buộc Giám Thị")
+        constraint_layout = QFormLayout(constraint_group)
+        constraint_layout.setSpacing(15)
+        constraint_layout.setLabelAlignment(Qt.AlignRight)
+        
+        # Số tối đa môn thi/tuần cho 1 giám thị
+        self.max_exams_per_week = SpinBox()
+        self.max_exams_per_week.setRange(1, 30)
+        self.max_exams_per_week.setValue(5)
+        self.max_exams_per_week.setToolTip("Tối đa số môn thi 1 giám thị gác trong 1 tuần")
+        constraint_layout.addRow(
+            BodyLabel("Tối đa môn/tuần/giám thị:"), 
+            self.max_exams_per_week
+        )
+        
+        # Số tối đa môn thi/ngày cho 1 giám thị
+        self.max_exams_per_day = SpinBox()
+        self.max_exams_per_day.setRange(1, 10)
+        self.max_exams_per_day.setValue(3)
+        self.max_exams_per_day.setToolTip("Tối đa số môn thi 1 giám thị gác trong 1 ngày")
+        constraint_layout.addRow(
+            BodyLabel("Tối đa môn/ngày/giám thị:"), 
+            self.max_exams_per_day
+        )
+        
+        # Thêm info label cho ràng buộc
+        info_label = BodyLabel("Mỗi giám thị sẽ không được phân công quá số lượng trên.")
+        info_label.setStyleSheet("color: #999; font-size: 8pt; font-style: italic")
+        constraint_layout.addRow("", info_label)
+        
+        main_layout.addWidget(constraint_group)
+        
+        # --- 4. ALGORITHM SELECTION ---
         algo_group = QGroupBox("Chọn Thuật toán")
         algo_layout = QVBoxLayout(algo_group)
         
@@ -72,7 +137,7 @@ class ConfigWidget(CardWidget):
         
         main_layout.addWidget(algo_group)
         
-        # --- 3. PARAMETERS STACK (Trang cấu hình riêng cho từng thuật toán) ---
+        # --- 5. PARAMETERS STACK (Trang cấu hình riêng cho từng thuật toán) ---
         self.param_stack = QStackedWidget()
         
         # === Page 1: SA Parameters ===
@@ -143,9 +208,30 @@ class ConfigWidget(CardWidget):
     def _on_algo_changed(self, index):
         """Chuyển đổi giao diện tham số khi đổi thuật toán."""
         self.param_stack.setCurrentIndex(index)
+    
+    def _on_date_changed(self):
+        """Validation ngày bắt đầu và kết thúc."""
+        start = self.start_date.date().toPyDate()
+        end = self.end_date.date().toPyDate()
+        
+        if start > end:
+            self.date_status_label.setText("⚠️ Ngày bắt đầu không được sau ngày kết thúc")
+            self.date_status_label.setStyleSheet("color: #FF4D4F; font-size: 9pt")
+        else:
+            days_diff = (end - start).days + 1
+            self.date_status_label.setText(f"✓ Hợp lệ ({days_diff} ngày)")
+            self.date_status_label.setStyleSheet("color: green; font-size: 9pt")
 
     def _reset_defaults(self):
         """Khôi phục giá trị mặc định."""
+        # Date defaults
+        self.start_date.setDate(QDate.currentDate())
+        self.end_date.setDate(QDate.currentDate().addDays(30))
+        
+        # Constraint defaults
+        self.max_exams_per_week.setValue(5)
+        self.max_exams_per_day.setValue(3)
+        
         # SA Defaults
         self.sa_temp.setValue(1000.0)
         self.sa_cooling.setValue(0.995)
@@ -158,13 +244,24 @@ class ConfigWidget(CardWidget):
         self.pso_c2.setValue(1.5)
         # Reset algo
         self.algo_combo.setCurrentIndex(0)
+        
+        # Reset date validation
+        self._on_date_changed()
 
     def get_config(self) -> Dict[str, Any]:
-        """Lấy config dựa trên thuật toán đang chọn."""
+        """Lấy config dựa trên thuật toán đang chọn + cấu hình lịch."""
         algo_idx = self.algo_combo.currentIndex()
         algo_type = 'sa' if algo_idx == 0 else 'pso'
         
         config = {'algorithm': algo_type}
+        
+        # Thêm cấu hình lịch và ràng buộc
+        config['schedule_config'] = {
+            'start_date': self.start_date.date().toString('yyyy-MM-dd'),
+            'end_date': self.end_date.date().toString('yyyy-MM-dd'),
+            'max_exams_per_week': int(self.max_exams_per_week.value()),
+            'max_exams_per_day': int(self.max_exams_per_day.value()),
+        }
         
         if algo_type == 'sa':
             config.update({
@@ -188,3 +285,35 @@ class ConfigWidget(CardWidget):
         self.data_status_label.setText(f"Trạng thái: {text}")
         color = "green" if is_success else "red"
         self.data_status_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 9pt")
+    
+    def get_schedule_config(self) -> Dict[str, Any]:
+        """
+        Lấy riêng cấu hình lịch thi.
+        
+        Returns:
+            Dict chứa:
+                - start_date: Ngày bắt đầu (YYYY-MM-DD)
+                - end_date: Ngày kết thúc (YYYY-MM-DD)
+                - max_exams_per_week: Tối đa môn/tuần/giám thị
+                - max_exams_per_day: Tối đa môn/ngày/giám thị
+        """
+        return {
+            'start_date': self.start_date.date().toString('yyyy-MM-dd'),
+            'end_date': self.end_date.date().toString('yyyy-MM-dd'),
+            'max_exams_per_week': int(self.max_exams_per_week.value()),
+            'max_exams_per_day': int(self.max_exams_per_day.value()),
+        }
+    
+    def get_proctor_constraints(self) -> Dict[str, int]:
+        """
+        Lấy ràng buộc giám thị.
+        
+        Returns:
+            Dict chứa:
+                - max_exams_per_week: Tối đa môn/tuần
+                - max_exams_per_day: Tối đa môn/ngày
+        """
+        return {
+            'max_exams_per_week': int(self.max_exams_per_week.value()),
+            'max_exams_per_day': int(self.max_exams_per_day.value()),
+        }

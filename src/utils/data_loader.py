@@ -43,6 +43,13 @@ class DataLoader:
         'Số lượng ĐK': 'student_count',
         'Số lượng SV': 'student_count',  # Alias
         'SL ĐK': 'student_count',  # Alias
+        # ENHANCED: Thêm hỗ trợ cho duration và is_locked
+        'Thời lượng': 'duration',
+        'Duration': 'duration',  # Alias
+        'Số phút': 'duration',  # Alias
+        'Cố định': 'is_locked',
+        'Locked': 'is_locked',  # Alias
+        'Khóa': 'is_locked',  # Alias
     }
     
     ROOM_COLUMN_MAPPING = {
@@ -202,29 +209,29 @@ class DataLoader:
             
             # Tìm các cột cần thiết
             column_map = {}
-            for possible_names, attr_name in cls.COURSE_COLUMN_MAPPING.items():
-                if isinstance(possible_names, str):
-                    possible_names = [possible_names]
-                
-                col = cls._find_column(df, possible_names)
-                if col:
-                    column_map[col] = attr_name
+            
+            # Xử lý từng cột một cách riêng biệt để tìm tất cả alias
+            course_id_col = cls._find_column(df, ['Mã LHP', 'Ma LHP'])
+            name_col = cls._find_column(df, ['Tên HP', 'Ten HP', 'Tên môn', 'Ten mon'])
+            location_col = cls._find_column(df, ['Địa điểm', 'Dia diem', 'Cơ sở', 'Co so'])
+            exam_format_col = cls._find_column(df, ['Hình thức thi', 'Hinh thuc thi', 'Hình thức'])
+            
+            # Optional columns
+            note_col = cls._find_column(df, ['Ghi chú', 'Ghi chu', 'Note', 'Ghi chép'])
+            student_count_col = cls._find_column(df, ['Số lượng ĐK', 'So luong DK', 'Số lượng SV', 'So luong SV', 'SL ĐK', 'SL DK'])
+            duration_col = cls._find_column(df, ['Thời lượng', 'Thoi luong', 'Duration', 'Số phút', 'So phut'])
+            is_locked_col = cls._find_column(df, ['Cố định', 'Co dinh', 'Locked', 'Khóa', 'Khoa'])
             
             # Kiểm tra các cột bắt buộc
-            required_attrs = ['course_id', 'name', 'location', 'exam_format']
-            missing_attrs = [
-                attr for attr in required_attrs 
-                if attr not in column_map.values()
-            ]
-            
-            if missing_attrs:
+            if not all([course_id_col, name_col, location_col, exam_format_col]):
                 raise ValueError(
-                    f"Thiếu các cột bắt buộc trong file: {missing_attrs}. "
+                    f"Thiếu các cột bắt buộc. "
                     f"Các cột hiện có: {df.columns.tolist()}"
                 )
             
+            
             # Kiểm tra xem có cột số lượng sinh viên không
-            has_student_count = 'student_count' in column_map.values()
+            has_student_count = student_count_col is not None
             if not has_student_count:
                 logger.warning(
                     "Không tìm thấy cột số lượng sinh viên. "
@@ -236,40 +243,71 @@ class DataLoader:
             for idx, row in df.iterrows():
                 try:
                     # Chuẩn bị dữ liệu
-                    course_data = {}
+                    course_data = {
+                        'course_id': str(row[course_id_col]) if course_id_col else '',
+                        'name': str(row[name_col]) if name_col else '',
+                        'location': str(row[location_col]) if location_col else '',
+                        'exam_format': str(row[exam_format_col]) if exam_format_col else '',
+                        'note': str(row[note_col]) if note_col and pd.notna(row[note_col]) else '',
+                    }
                     
-                    for col, attr in column_map.items():
-                        value = row[col]
-                        
-                        # Xử lý giá trị thiếu
-                        if pd.isna(value):
-                            if attr == 'note':
-                                value = ""
-                            elif attr == 'student_count':
-                                value = 0
-                            else:
-                                logger.warning(
-                                    f"Dòng {idx + 1}: Thiếu giá trị cho cột '{col}'"
-                                )
-                                value = ""
-                        
-                        course_data[attr] = value
+                    # Xử lý student_count
+                    if has_student_count and pd.notna(row[student_count_col]):
+                        try:
+                            course_data['student_count'] = int(row[student_count_col])
+                        except (ValueError, TypeError):
+                            course_data['student_count'] = 0
+                    else:
+                        course_data['student_count'] = 0
                     
                     # Random số lượng sinh viên nếu không có
-                    if not has_student_count or course_data.get('student_count', 0) == 0:
+                    if course_data['student_count'] == 0:
                         course_data['student_count'] = random.randint(30, 60)
                     
-                    # Đảm bảo student_count là integer
-                    course_data['student_count'] = int(course_data.get('student_count', 0))
+                    # ENHANCED: Xử lý duration
+                    duration = 90  # Mặc định
+                    if duration_col and pd.notna(row[duration_col]):
+                        try:
+                            duration = int(row[duration_col])
+                        except (ValueError, TypeError):
+                            duration = 90
+                    course_data['duration'] = duration
+                    
+                    # ENHANCED: Xử lý is_locked
+                    is_locked = False  # Mặc định
+                    if is_locked_col and pd.notna(row[is_locked_col]):
+                        value = str(row[is_locked_col]).strip().lower()
+                        # Kiểm tra các giá trị: "yes", "true", "x", "1", "có", "đúng"
+                        is_locked = value in ['yes', 'true', 'x', '1', 'có', 'đúng', 'locked']
+                    course_data['is_locked'] = is_locked
+                    
+                    # Nếu is_locked=True, kiểm tra xem có sẵn lịch không
+                    if is_locked:
+                        # Tìm các cột ngày/giờ/phòng nếu có
+                        assigned_date_col = cls._find_column(df, ['Ngày thi', 'Ngay thi', 'Date', 'Assigned Date'])
+                        assigned_time_col = cls._find_column(df, ['Giờ thi', 'Gio thi', 'Time', 'Assigned Time'])
+                        assigned_room_col = cls._find_column(df, ['Phòng thi', 'Phong thi', 'Room', 'Assigned Room'])
+                        
+                        # Nếu có đầy đủ thông tin: gán lịch ban đầu
+                        if all([assigned_date_col, assigned_time_col, assigned_room_col]):
+                            if pd.notna(row[assigned_date_col]) and pd.notna(row[assigned_time_col]) and pd.notna(row[assigned_room_col]):
+                                course_data['assigned_date'] = str(row[assigned_date_col]).strip()
+                                course_data['assigned_time'] = str(row[assigned_time_col]).strip()
+                                course_data['assigned_room'] = str(row[assigned_room_col]).strip()
                     
                     # Tạo Course object
                     course = Course(
-                        course_id=str(course_data.get('course_id', '')),
-                        name=str(course_data.get('name', '')),
-                        location=str(course_data.get('location', '')),
-                        exam_format=str(course_data.get('exam_format', '')),
-                        note=str(course_data.get('note', '')),
-                        student_count=course_data['student_count']
+                        course_id=course_data['course_id'],
+                        name=course_data['name'],
+                        location=course_data['location'],
+                        exam_format=course_data['exam_format'],
+                        note=course_data.get('note', ''),
+                        student_count=course_data['student_count'],
+                        duration=course_data.get('duration', 90),
+                        is_locked=course_data.get('is_locked', False),
+                        assigned_date=course_data.get('assigned_date'),
+                        assigned_time=course_data.get('assigned_time'),
+                        assigned_room=course_data.get('assigned_room')
                     )
                     
                     courses.append(course)

@@ -77,8 +77,15 @@ class SASolver(BaseSolver):
         self.max_iterations = self.config.get('max_iterations', 10000)
         self.neighbor_type = self.config.get('neighbor_type', 'random')
         
-        # Constraint checker
-        self.constraint_checker = ConstraintChecker(rooms)
+        # Constraint checker với proctor constraints
+        schedule_config = self.config.get('schedule_config', {})
+        max_exams_per_week = schedule_config.get('max_exams_per_week', 5)
+        max_exams_per_day = schedule_config.get('max_exams_per_day', 3)
+        self.constraint_checker = ConstraintChecker(
+            rooms, 
+            max_exams_per_week=max_exams_per_week,
+            max_exams_per_day=max_exams_per_day
+        )
         
         # Time slots và schedule parameters
         self.available_dates = self._generate_exam_dates()
@@ -92,48 +99,17 @@ class SASolver(BaseSolver):
         self._log(f"🔥 SA Solver initialized (OPTIMIZED): T0={self.initial_temperature}, "
                   f"cooling={self.cooling_rate}, max_iter={self.max_iterations}")
     
-    def _generate_exam_dates(self) -> List[str]:
-        """
-        Tạo danh sách các ngày thi khả dụng.
-        
-        Returns:
-            List[str]: Danh sách ngày thi (format: YYYY-MM-DD).
-        """
-        dates = []
-        base_date = "2025-01-15"  # Ngày bắt đầu kỳ thi
-        
-        from datetime import datetime, timedelta
-        start = datetime.strptime(base_date, "%Y-%m-%d")
-        
-        for i in range(14):  # 14 ngày thi
-            date = start + timedelta(days=i)
-            dates.append(date.strftime("%Y-%m-%d"))
-        
-        return dates
-    
-    def _generate_time_slots(self) -> List[str]:
-        """
-        Tạo danh sách các ca thi trong ngày.
-        
-        Returns:
-            List[str]: Danh sách giờ thi.
-        """
-        return [
-            "07:00",  # Ca 1: Sáng sớm
-            "09:30",  # Ca 2: Giữa buổi sáng
-            "13:30",  # Ca 3: Đầu giờ chiều
-            "15:30",  # Ca 4: Chiều muộn
-        ]
-    
     def _generate_initial_solution(self) -> Schedule:
         """
         Tạo lịch thi ngẫu nhiên ban đầu.
         
         ENHANCED: Hỗ trợ chia môn học thành nhiều ca và tối ưu lựa chọn phòng.
+        ENHANCED: Hỗ trợ khóa cứng lịch thi (is_locked) - giữ nguyên nếu đã được xếp.
         
         Strategy:
             - Tự động chia môn học thành nhiều ca nếu số lượng sinh viên quá lớn
-            - Với mỗi môn học/ca, random ngày/giờ/phòng
+            - Với mỗi môn học/ca, nếu is_locked=True và đã có lịch: Giữ nguyên
+            - Nếu is_locked=False hoặc chưa có lịch: Random ngày/giờ/phòng
             - Ưu tiên phòng cùng địa điểm và có utilization tốt
             - Đảm bảo phòng đủ sức chứa
         
@@ -159,35 +135,46 @@ class SASolver(BaseSolver):
                 location=course.location,
                 exam_format=course.exam_format,
                 note=course.note,
-                student_count=course.student_count
+                student_count=course.student_count,
+                is_locked=course.is_locked,
+                duration=course.duration
             )
             
-            # Random assign schedule
-            new_course.assigned_date = random.choice(self.available_dates)
-            new_course.assigned_time = random.choice(self.available_times)
-            
-            # Tìm phòng tối ưu
-            optimal_room = self._find_optimal_room(
-                new_course.student_count,
-                new_course.location,
-                prefer_smaller=False
-            )
-            
-            if optimal_room:
-                new_course.assigned_room = optimal_room.room_id
+            # ENHANCED: Kiểm tra is_locked
+            # Nếu is_locked=True và đã có lịch: Giữ nguyên ngày/giờ/phòng, nhưng vẫn phân công giám thị
+            if course.is_locked and course.is_scheduled():
+                new_course.assigned_date = course.assigned_date
+                new_course.assigned_time = course.assigned_time
+                new_course.assigned_room = course.assigned_room
+                self._log(f"🔒 Giữ nguyên lịch của môn {course.course_id} (locked)")
             else:
-                # Fallback: Chọn random phòng cùng địa điểm
-                suitable_rooms = [
-                    room for room in self.rooms
-                    if room.location == course.location and 
-                       room.capacity >= course.student_count
-                ]
-                if suitable_rooms:
-                    new_course.assigned_room = random.choice(suitable_rooms).room_id
+                # Random assign schedule
+                new_course.assigned_date = random.choice(self.available_dates)
+                new_course.assigned_time = random.choice(self.available_times)
+                
+                # Tìm phòng tối ưu
+                optimal_room = self._find_optimal_room(
+                    new_course.student_count,
+                    new_course.location,
+                    prefer_smaller=False
+                )
+                
+                if optimal_room:
+                    new_course.assigned_room = optimal_room.room_id
                 else:
-                    new_course.assigned_room = random.choice(self.rooms).room_id
+                    # Fallback: Chọn random phòng cùng địa điểm
+                    suitable_rooms = [
+                        room for room in self.rooms
+                        if room.location == course.location and 
+                           room.capacity >= course.student_count
+                    ]
+                    if suitable_rooms:
+                        new_course.assigned_room = random.choice(suitable_rooms).room_id
+                    else:
+                        new_course.assigned_room = random.choice(self.rooms).room_id
             
-            # Phân công giám thị ngẫu nhiên (nếu có danh sách giám thị)
+            # Phân công giám thị ngẫu nhiên cho TẤT CẢ MÔN (kể cả môn bị khóa)
+            # vì giám thị cần được tối ưu độc lập
             if self.proctors:
                 random_proctor = random.choice(self.proctors)
                 new_course.assigned_proctor_id = random_proctor.proctor_id
@@ -302,6 +289,7 @@ class SASolver(BaseSolver):
         Thực hiện random move trên 1 course hoặc 1 session.
         
         ENHANCED: Hỗ trợ xử lý sessions.
+        ENHANCED: KHÔNG thay đổi môn học có is_locked=True (Pinning).
         
         Args:
             schedule: Lịch thi cần thay đổi.
@@ -310,9 +298,35 @@ class SASolver(BaseSolver):
         Returns:
             backup_data đã được cập nhật.
         """
-        # Chọn ngẫu nhiên 1 môn (giờ mỗi course là 1 ca thi riêng)
-        idx = random.randint(0, len(schedule.courses) - 1)
-        course = schedule.courses[idx]
+        # ENHANCED: Lọc ra các môn có is_locked=False
+        # Chỉ được thay đổi ngày/giờ/phòng của các môn mà không bị khóa
+        modifiable_courses = [
+            (idx, course) for idx, course in enumerate(schedule.courses)
+            if not course.is_locked
+        ]
+        
+        # Nếu tất cả môn đều bị khóa, chỉ có thể thay đổi giám thị
+        if not modifiable_courses:
+            # Thay đổi giám thị cho 1 môn ngẫu nhiên (kể cả môn bị khóa)
+            if self.proctors:
+                idx = random.randint(0, len(schedule.courses) - 1)
+                course = schedule.courses[idx]
+                
+                backup_data['course_indices'] = [idx]
+                backup_data['old_values'] = [{
+                    'date': course.assigned_date,
+                    'time': course.assigned_time,
+                    'room': course.assigned_room,
+                    'proctor': course.assigned_proctor_id
+                }]
+                
+                random_proctor = random.choice(self.proctors)
+                course.assigned_proctor_id = random_proctor.proctor_id
+            
+            return backup_data
+        
+        # Chọn 1 môn ngẫu nhiên từ danh sách modifiable
+        idx, course = random.choice(modifiable_courses)
         
         # Backup
         backup_data['course_indices'] = [idx]

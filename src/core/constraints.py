@@ -42,17 +42,25 @@ class ConstraintChecker:
     Sử dụng các cấu trúc dữ liệu tối ưu để tăng hiệu năng.
     """
     
-    def __init__(self, rooms: List[Room] = None):
+    def __init__(self, rooms: List[Room] = None, 
+                 max_exams_per_week: int = 5, 
+                 max_exams_per_day: int = 3):
         """
         Khởi tạo ConstraintChecker.
         
         Args:
             rooms (List[Room], optional): Danh sách các phòng thi có sẵn.
                                          Dùng để kiểm tra sức chứa nhanh hơn.
+            max_exams_per_week (int): Tối đa số môn thi 1 giám thị trong 1 tuần (mặc định: 5).
+            max_exams_per_day (int): Tối đa số môn thi 1 giám thị trong 1 ngày (mặc định: 3).
         """
         self.rooms_dict: Dict[str, Room] = {}
         if rooms:
             self.rooms_dict = {room.room_id: room for room in rooms}
+        
+        # Proctor constraints
+        self.max_exams_per_week = max_exams_per_week
+        self.max_exams_per_day = max_exams_per_day
     
     def set_rooms(self, rooms: List[Room]) -> None:
         """
@@ -63,16 +71,55 @@ class ConstraintChecker:
         """
         self.rooms_dict = {room.room_id: room for room in rooms}
     
+    def _check_overlap(self, t1_start_str: str, t1_duration: int, 
+                       t2_start_str: str, t2_duration: int) -> bool:
+        """
+        ENHANCED: Helper method để kiểm tra xem 2 khoảng thời gian có bị chồng lấn (overlap) không.
+        
+        Sử dụng datetime để tính toán chính xác:
+        - t1: [t1_start, t1_start + t1_duration]
+        - t2: [t2_start, t2_start + t2_duration]
+        
+        Overlap xảy ra khi: t1_start < t2_start + t2_duration AND t2_start < t1_start + t1_duration
+        
+        Args:
+            t1_start_str (str): Thời gian bắt đầu môn 1 (format: "HH:MM").
+            t1_duration (int): Thời lượng môn 1 (phút).
+            t2_start_str (str): Thời gian bắt đầu môn 2 (format: "HH:MM").
+            t2_duration (int): Thời lượng môn 2 (phút).
+        
+        Returns:
+            bool: True nếu có overlap, False nếu không.
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            # Parse thời gian bắt đầu
+            t1_start = datetime.strptime(t1_start_str, "%H:%M")
+            t2_start = datetime.strptime(t2_start_str, "%H:%M")
+            
+            # Tính thời gian kết thúc
+            t1_end = t1_start + timedelta(minutes=t1_duration)
+            t2_end = t2_start + timedelta(minutes=t2_duration)
+            
+            # Kiểm tra overlap: 2 khoảng [a, b] và [c, d] overlap khi a < d AND c < b
+            return t1_start < t2_end and t2_start < t1_end
+        except (ValueError, TypeError):
+            # Nếu parse thất bại, coi như không overlap
+            return False
+    
+    
     def _check_room_conflicts(self, schedule: Schedule) -> float:
         """
         Kiểm tra vi phạm trùng phòng: Nhiều môn thi cùng phòng, cùng ngày, cùng giờ.
         
         ENHANCED: Hỗ trợ kiểm tra cả sessions.
+        ENHANCED: Kiểm tra overlap thời gian dựa trên duration, không chỉ so sánh giờ bắt đầu.
         
         Strategy:
-            - Sử dụng dictionary với key = (date, time, room_id)
-            - Đếm số môn học/ca thi có cùng key
-            - Nếu > 1 => Vi phạm
+            - Nhóm các môn theo (date, room)
+            - Kiểm tra từng cặp môn trong cùng nhóm xem thời gian có overlap không
+            - Sử dụng _check_overlap để kiểm tra với duration
         
         Args:
             schedule (Schedule): Lịch thi cần kiểm tra.
@@ -82,27 +129,34 @@ class ConstraintChecker:
         """
         penalty = 0.0
         
-        # Dictionary: (date, time, room) -> số lượng môn học/ca thi
-        slot_usage: Dict[Tuple[str, str, str], int] = defaultdict(int)
+        # Dictionary: (date, room) -> List[(course, time, duration)]
+        room_schedule: Dict[Tuple[str, str], List[Tuple[Course, str, int]]] = defaultdict(list)
         
         for course in schedule.courses:
             # Xử lý sessions nếu có
             if course.sessions:
                 for session in course.sessions:
                     if session.is_scheduled():
-                        key = (session.assigned_date, session.assigned_time, session.assigned_room)
-                        slot_usage[key] += 1
+                        key = (session.assigned_date, session.assigned_room)
+                        duration = getattr(course, 'duration', 90)  # Lấy duration từ course cha
+                        room_schedule[key].append((session, session.assigned_time, duration))
             # Backward compatible: Xử lý course không chia ca
             elif course.is_scheduled():
-                key = (course.assigned_date, course.assigned_time, course.assigned_room)
-                slot_usage[key] += 1
+                key = (course.assigned_date, course.assigned_room)
+                duration = getattr(course, 'duration', 90)  # Lấy duration từ course
+                room_schedule[key].append((course, course.assigned_time, duration))
         
-        # Tính điểm phạt: mỗi slot có > 1 môn/ca = vi phạm
-        for key, count in slot_usage.items():
-            if count > 1:
-                # Phạt (count - 1) lần vì có (count - 1) môn/ca bị trùng
-                conflicts = count - 1
-                penalty += conflicts * ConstraintWeights.ROOM_CONFLICT
+        # Kiểm tra overlap giữa các cặp môn trong cùng phòng/ngày
+        for (date, room), exams in room_schedule.items():
+            # Kiểm tra tất cả các cặp
+            for i in range(len(exams)):
+                for j in range(i + 1, len(exams)):
+                    exam1, time1, duration1 = exams[i]
+                    exam2, time2, duration2 = exams[j]
+                    
+                    # Kiểm tra overlap
+                    if self._check_overlap(time1, duration1, time2, duration2):
+                        penalty += ConstraintWeights.ROOM_CONFLICT
         
         return penalty
     
@@ -110,10 +164,12 @@ class ConstraintChecker:
         """
         Kiểm tra vi phạm trùng giám thị: Một giám thị coi thi 2 môn tại cùng một thời điểm (Ngày + Giờ).
         
+        ENHANCED: Kiểm tra overlap thời gian dựa trên duration, không chỉ so sánh giờ bắt đầu.
+        
         Strategy:
-            - Sử dụng dictionary với key = (date, time, proctor_id)
-            - Đếm số môn học có cùng key
-            - Nếu > 1 => Vi phạm (một giám thị không thể coi thi 2 môn cùng lúc)
+            - Nhóm các môn theo (date, proctor_id)
+            - Kiểm tra từng cặp môn trong cùng nhóm xem thời gian có overlap không
+            - Sử dụng _check_overlap để kiểm tra với duration
         
         Args:
             schedule (Schedule): Lịch thi cần kiểm tra.
@@ -123,8 +179,8 @@ class ConstraintChecker:
         """
         penalty = 0.0
         
-        # Dictionary: (date, time, proctor_id) -> số lượng môn học
-        slot_usage: Dict[Tuple[str, str, str], int] = defaultdict(int)
+        # Dictionary: (date, proctor_id) -> List[(course, time, duration)]
+        proctor_schedule: Dict[Tuple[str, str], List[Tuple[Course, str, int]]] = defaultdict(list)
         
         for course in schedule.courses:
             # Chỉ kiểm tra nếu môn học đã được xếp lịch và có giám thị
@@ -135,19 +191,26 @@ class ConstraintChecker:
             if course.sessions:
                 for session in course.sessions:
                     if session.is_scheduled() and hasattr(session, 'assigned_proctor_id') and session.assigned_proctor_id:
-                        key = (session.assigned_date, session.assigned_time, session.assigned_proctor_id)
-                        slot_usage[key] += 1
+                        key = (session.assigned_date, session.assigned_proctor_id)
+                        duration = getattr(course, 'duration', 90)
+                        proctor_schedule[key].append((session, session.assigned_time, duration))
             # Backward compatible: Xử lý course không chia ca
             else:
-                key = (course.assigned_date, course.assigned_time, course.assigned_proctor_id)
-                slot_usage[key] += 1
+                key = (course.assigned_date, course.assigned_proctor_id)
+                duration = getattr(course, 'duration', 90)
+                proctor_schedule[key].append((course, course.assigned_time, duration))
         
-        # Tính điểm phạt: mỗi slot có > 1 môn = vi phạm
-        for key, count in slot_usage.items():
-            if count > 1:
-                # Phạt (count - 1) lần vì có (count - 1) môn bị trùng
-                conflicts = count - 1
-                penalty += conflicts * ConstraintWeights.PROCTOR_CONFLICT
+        # Kiểm tra overlap giữa các cặp môn cùng giám thị/ngày
+        for (date, proctor_id), exams in proctor_schedule.items():
+            # Kiểm tra tất cả các cặp
+            for i in range(len(exams)):
+                for j in range(i + 1, len(exams)):
+                    exam1, time1, duration1 = exams[i]
+                    exam2, time2, duration2 = exams[j]
+                    
+                    # Kiểm tra overlap
+                    if self._check_overlap(time1, duration1, time2, duration2):
+                        penalty += ConstraintWeights.PROCTOR_CONFLICT
         
         return penalty
     
@@ -411,6 +474,12 @@ class ConstraintChecker:
         # 7. ENHANCED: Kiểm tra khoảng cách phòng cho cùng môn (Soft - Optimization)
         total_penalty += self._check_room_distance_penalty(schedule)
         
+        # 8. NEW: Kiểm tra khối lượng công việc giám thị theo tuần (Soft constraint)
+        total_penalty += self.check_proctor_workload_per_week(schedule, self.max_exams_per_week)
+        
+        # 9. NEW: Kiểm tra khối lượng công việc giám thị theo ngày (Soft constraint)
+        total_penalty += self.check_proctor_workload_per_day(schedule, self.max_exams_per_day)
+        
         return total_penalty
     
     def get_violation_details(self, schedule: Schedule) -> Dict[str, float]:
@@ -433,8 +502,79 @@ class ConstraintChecker:
             'unscheduled_courses': self._check_unscheduled_courses(schedule),
             'underutilization': self._check_room_underutilization(schedule),
             'room_distance': self._check_room_distance_penalty(schedule),
+            'proctor_workload_per_week': self.check_proctor_workload_per_week(schedule, self.max_exams_per_week),
+            'proctor_workload_per_day': self.check_proctor_workload_per_day(schedule, self.max_exams_per_day),
             'total': self.calculate_total_violation(schedule)
         }
+    
+    def check_proctor_workload_per_week(self, schedule: Schedule, max_exams_per_week: int = 5) -> float:
+        """
+        Kiểm tra ràng buộc: Mỗi giám thị không được coi quá max_exams_per_week môn thi trong 1 tuần.
+        
+        Args:
+            schedule (Schedule): Lịch thi cần kiểm tra.
+            max_exams_per_week (int): Tối đa số môn thi 1 giám thị có thể gác trong 1 tuần.
+        
+        Returns:
+            float: Tổng điểm phạt (0 nếu không vi phạm).
+        """
+        from datetime import datetime, timedelta
+        
+        violation = 0.0
+        proctor_exams_per_week = defaultdict(lambda: defaultdict(int))  # {proctor_id: {week_start: count}}
+        
+        for course in schedule.courses:
+            if not course.is_scheduled() or not course.assigned_proctor_id:
+                continue
+            
+            try:
+                course_date = datetime.strptime(course.assigned_date, "%Y-%m-%d").date()
+                # Tính thứ 2 của tuần (ngày bắt đầu tuần)
+                weekday = course_date.weekday()  # 0=Monday, 6=Sunday
+                monday = course_date - timedelta(days=weekday)
+                
+                proctor_exams_per_week[course.assigned_proctor_id][monday] += 1
+            except ValueError:
+                pass
+        
+        # Kiểm tra vi phạm
+        for proctor_id, weeks in proctor_exams_per_week.items():
+            for week_start, exam_count in weeks.items():
+                if exam_count > max_exams_per_week:
+                    # Mỗi môn vượt quá giới hạn bị phạt
+                    violation += (exam_count - max_exams_per_week) * 200.0  # Hệ số phạt: 200
+        
+        return violation
+    
+    def check_proctor_workload_per_day(self, schedule: Schedule, max_exams_per_day: int = 3) -> float:
+        """
+        Kiểm tra ràng buộc: Mỗi giám thị không được coi quá max_exams_per_day môn thi trong 1 ngày.
+        
+        Args:
+            schedule (Schedule): Lịch thi cần kiểm tra.
+            max_exams_per_day (int): Tối đa số môn thi 1 giám thị có thể gác trong 1 ngày.
+        
+        Returns:
+            float: Tổng điểm phạt (0 nếu không vi phạm).
+        """
+        violation = 0.0
+        proctor_exams_per_day = defaultdict(lambda: defaultdict(int))  # {proctor_id: {date: count}}
+        
+        for course in schedule.courses:
+            if not course.is_scheduled() or not course.assigned_proctor_id:
+                continue
+            
+            if course.assigned_date:
+                proctor_exams_per_day[course.assigned_proctor_id][course.assigned_date] += 1
+        
+        # Kiểm tra vi phạm
+        for proctor_id, days in proctor_exams_per_day.items():
+            for date, exam_count in days.items():
+                if exam_count > max_exams_per_day:
+                    # Mỗi môn vượt quá giới hạn bị phạt
+                    violation += (exam_count - max_exams_per_day) * 100.0  # Hệ số phạt: 100
+        
+        return violation
     
     def is_feasible(self, schedule: Schedule) -> bool:
         """

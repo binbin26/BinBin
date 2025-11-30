@@ -1,13 +1,15 @@
 """
 File: src/ui/widgets/schedule_table.py
-Widget hiển thị bảng kết quả xếp lịch thi.
-SỬA LỖI: Dùng QTableWidgetItem thay vì TableItem.
+Widget hiển thị bảng kết quả xếp lịch thi với lựa chọn giữa View bảng và View lưới.
 """
 
-from PyQt5.QtWidgets import QHeaderView, QTableWidgetItem  # <--- IMPORT QTableWidgetItem TẠI ĐÂY
+from PyQt5.QtWidgets import (
+    QHeaderView, QTableWidgetItem, QWidget, QVBoxLayout, QHBoxLayout, 
+    QRadioButton, QButtonGroup, QLabel
+)
 from PyQt5.QtGui import QColor, QBrush
 from PyQt5.QtCore import Qt
-from qfluentwidgets import TableWidget # <--- BỎ TableItem
+from qfluentwidgets import TableWidget
 
 import sys
 from pathlib import Path
@@ -20,33 +22,85 @@ sys.path.insert(0, str(project_root))
 from src.models.solution import Schedule
 from src.models.course import Course
 from src.models.room import Room
+from src.ui.widgets.calendar_view import CalendarView
 
-class ScheduleResultTable(TableWidget):
+
+class ScheduleResultTable(QWidget):
     """
-    Bảng hiển thị kết quả xếp lịch thi.
+    Widget kết hợp: Bảng kết quả xếp lịch + Thời khóa biểu dạng lưới.
+    Người dùng có thể chuyển đổi giữa 2 view bằng radio button.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.schedule = None
+        self.rooms_dict = {}
+        self.proctors_dict = {}
         
-        # 1. Cấu hình giao diện bảng
-        self.setBorderVisible(True)
-        self.setBorderRadius(8)
-        self.setWordWrap(False)
-        self.setAlternatingRowColors(True)
+        # Tạo 2 view
+        self.table_widget = TableWidget()
+        self.calendar_view = CalendarView()
         
-        # 2. Định nghĩa cột
+        # Setup UI
+        self._setup_ui()
+        
+        # Cấu hình bảng mặc định
+        self._configure_table()
+    
+    def _setup_ui(self) -> None:
+        """Thiết lập giao diện."""
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(10)
+        
+        # Toolbar cho chuyển đổi view
+        toolbar_layout = QHBoxLayout()
+        
+        view_label = QLabel("Chế độ xem:")
+        toolbar_layout.addWidget(view_label)
+        
+        self.view_group = QButtonGroup()
+        
+        self.table_radio = QRadioButton("Bảng chi tiết")
+        self.table_radio.setChecked(True)
+        self.table_radio.clicked.connect(self._switch_to_table)
+        self.view_group.addButton(self.table_radio, 0)
+        toolbar_layout.addWidget(self.table_radio)
+        
+        self.calendar_radio = QRadioButton("Thời khóa biểu (Lưới)")
+        self.calendar_radio.clicked.connect(self._switch_to_calendar)
+        self.view_group.addButton(self.calendar_radio, 1)
+        toolbar_layout.addWidget(self.calendar_radio)
+        
+        toolbar_layout.addStretch()
+        main_layout.addLayout(toolbar_layout)
+        
+        # Stack widget để chứa 2 view
+        self.table_widget.setBorderVisible(True)
+        self.table_widget.setBorderRadius(8)
+        self.table_widget.setWordWrap(False)
+        self.table_widget.setAlternatingRowColors(True)
+        
+        main_layout.addWidget(self.table_widget)
+        main_layout.addWidget(self.calendar_view)
+        
+        # Ẩn calendar_view lúc đầu
+        self.calendar_view.hide()
+    
+    def _configure_table(self) -> None:
+        """Cấu hình bảng."""
+        # Định nghĩa cột
         headers = [
             "Mã LHP", "Tên HP", "Ngày thi", "Giờ thi", 
             "Phòng thi", "Giám thị", "Địa điểm", "Hình thức thi", 
             "Sĩ số/Sức chứa", "Ghi chú"
         ]
         
-        self.setColumnCount(len(headers))
-        self.setHorizontalHeaderLabels(headers)
+        self.table_widget.setColumnCount(len(headers))
+        self.table_widget.setHorizontalHeaderLabels(headers)
         
-        # 3. Cấu hình độ rộng cột
-        header = self.horizontalHeader()
+        # Cấu hình độ rộng cột
+        header = self.table_widget.horizontalHeader()
         header.setSectionResizeMode(1, QHeaderView.Stretch)
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -55,37 +109,57 @@ class ScheduleResultTable(TableWidget):
         # Màu sắc highlight
         self.COLOR_ERROR = QColor("#FF4D4F")
         self.COLOR_WARNING = QColor("#FAAD14")
-        self.COLOR_DEFAULT = None 
+        self.COLOR_DEFAULT = None
+    
+    def _switch_to_table(self) -> None:
+        """Chuyển sang chế độ xem bảng."""
+        self.table_widget.show()
+        self.calendar_view.hide()
+    
+    def _switch_to_calendar(self) -> None:
+        """Chuyển sang chế độ xem lưới."""
+        self.table_widget.hide()
+        self.calendar_view.show()
 
     def update_data(self, schedule: Schedule, rooms_dict: dict, proctors_dict: dict = None):
         """
-        Cập nhật dữ liệu hiển thị trong bảng.
+        Cập nhật dữ liệu hiển thị trong cả bảng lẫn lưới.
         
         Args:
             schedule: Lịch thi cần hiển thị.
             rooms_dict: Dictionary map room_id -> Room object.
             proctors_dict: Dictionary map proctor_id -> Proctor object (optional).
         """
-        self.setRowCount(0)
+        self.schedule = schedule
+        self.rooms_dict = rooms_dict
+        self.proctors_dict = proctors_dict or {}
         
-        if not schedule or not schedule.courses:
+        # Cập nhật bảng
+        self._update_table_data()
+        
+        # Cập nhật lưới
+        if rooms_dict:
+            rooms_list = list(rooms_dict.values())
+            self.calendar_view.update_data(schedule, rooms_list, proctors_dict)
+
+    def _update_table_data(self) -> None:
+        """Cập nhật dữ liệu trong bảng chi tiết."""
+        self.table_widget.setRowCount(0)
+        
+        if not self.schedule or not self.schedule.courses:
             return
 
-        self.setUpdatesEnabled(False)
-        
-        # Xử lý proctors_dict (có thể None nếu không có giám thị)
-        if proctors_dict is None:
-            proctors_dict = {}
+        self.table_widget.setUpdatesEnabled(False)
 
         sorted_courses = sorted(
-            schedule.courses, 
+            self.schedule.courses, 
             key=lambda x: (str(x.assigned_date), str(x.assigned_time), str(x.assigned_room))
         )
 
         for row_idx, course in enumerate(sorted_courses):
-            self.insertRow(row_idx)
+            self.table_widget.insertRow(row_idx)
             
-            assigned_room_obj = rooms_dict.get(course.assigned_room)
+            assigned_room_obj = self.rooms_dict.get(course.assigned_room)
             
             capacity_str = "?"
             room_capacity_val = 0
@@ -98,7 +172,7 @@ class ScheduleResultTable(TableWidget):
             # Lấy tên giám thị (hoặc ID nếu không tìm thấy)
             proctor_name = "---"
             if course.assigned_proctor_id:
-                proctor_obj = proctors_dict.get(course.assigned_proctor_id)
+                proctor_obj = self.proctors_dict.get(course.assigned_proctor_id)
                 if proctor_obj:
                     proctor_name = proctor_obj.name
                 else:
@@ -127,7 +201,6 @@ class ScheduleResultTable(TableWidget):
                     row_text_color = self.COLOR_WARNING
 
             for col_idx, value in enumerate(row_data):
-                # --- SỬA Ở ĐÂY: Dùng QTableWidgetItem ---
                 item = QTableWidgetItem(str(value)) 
                 
                 if row_text_color:
@@ -138,6 +211,6 @@ class ScheduleResultTable(TableWidget):
                 else:
                     item.setTextAlignment(Qt.AlignCenter | Qt.AlignVCenter)
                 
-                self.setItem(row_idx, col_idx, item)
+                self.table_widget.setItem(row_idx, col_idx, item)
 
-        self.setUpdatesEnabled(True)
+        self.table_widget.setUpdatesEnabled(True)

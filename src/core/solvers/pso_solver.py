@@ -96,8 +96,15 @@ class PSOSolver(BaseSolver):
         # Hệ số xã hội (Social - GBest)
         self.c2 = float(self.config.get('c2', 1.5))
         
-        # Constraint Checker
-        self.constraint_checker = ConstraintChecker(rooms)
+        # Constraint Checker với proctor constraints
+        schedule_config = self.config.get('schedule_config', {})
+        max_exams_per_week = schedule_config.get('max_exams_per_week', 5)
+        max_exams_per_day = schedule_config.get('max_exams_per_day', 3)
+        self.constraint_checker = ConstraintChecker(
+            rooms,
+            max_exams_per_week=max_exams_per_week,
+            max_exams_per_day=max_exams_per_day
+        )
         
         # Statistics
         self.gbest_updates = 0
@@ -141,9 +148,51 @@ class PSOSolver(BaseSolver):
                   f"max_iter={self.max_iterations}, w={self.w}, c1={self.c1}, c2={self.c2}")
         self._log(f"📊 Courses: {self.num_courses}, Dimension: {self.dimension}")
 
+    def _assign_proctors_to_schedule(self, schedule: Schedule) -> None:
+        """
+        Gán giám thị cho tất cả các môn thi chưa được gán.
+        
+        Sử dụng chiến lược phân công giám thị ngẫu nhiên để cân bằng tải.
+        
+        Args:
+            schedule (Schedule): Schedule object cần gán giám thị
+        """
+        if not self.proctors or not schedule or not schedule.courses:
+            return
+        
+        proctor_assignments = {}  # Map to track assignments per proctor
+        
+        for course in schedule.courses:
+            # Nếu đã có giám thị, skip
+            if course.assigned_proctor_id:
+                continue
+            
+            # Tìm giám thị có ít công việc nhất (load balancing)
+            min_assignments = float('inf')
+            best_proctor = None
+            
+            for proctor in self.proctors:
+                if proctor.proctor_id not in proctor_assignments:
+                    proctor_assignments[proctor.proctor_id] = 0
+                
+                assignments_count = proctor_assignments[proctor.proctor_id]
+                
+                if assignments_count < min_assignments:
+                    min_assignments = assignments_count
+                    best_proctor = proctor
+            
+            # Gán giám thị tốt nhất (có ít công việc nhất)
+            if best_proctor:
+                course.assigned_proctor_id = best_proctor.proctor_id
+                proctor_assignments[best_proctor.proctor_id] += 1
+
     def _decode_position_to_schedule(self, position: np.ndarray) -> Schedule:
         """
         Chuyển đổi Vector vị trí (Float) thành đối tượng Schedule (Discrete).
+        
+        ENHANCED: Hỗ trợ khóa cứng lịch thi (is_locked).
+        Khi decode, nếu course gốc có is_locked=True, bỏ qua giá trị từ vector 
+        và dùng giá trị cố định ban đầu của course đó.
         
         Position structure: [c1_time, c1_room, c2_time, c2_room, ...]
         Mỗi course đã được chia thành Course objects riêng biệt.
@@ -154,18 +203,6 @@ class PSOSolver(BaseSolver):
         for i in range(self.num_courses):
             course_template = self.processed_courses[i]
             
-            # Lấy giá trị float và ép kiểu int để ra index
-            time_idx = int(position[2*i])
-            room_idx = int(position[2*i+1])
-            
-            # Clip index để tránh lỗi out of bound (phòng ngừa)
-            time_idx = np.clip(time_idx, 0, self.num_time_slots - 1)
-            room_idx = np.clip(room_idx, 0, self.num_rooms - 1)
-            
-            # Map ngược lại dữ liệu thực
-            date_val, time_val = self.time_slots_flat[time_idx]
-            room_val = self.rooms[room_idx].room_id
-            
             # Tạo object Course mới đã được gán lịch
             new_course = Course(
                 course_id=course_template.course_id,
@@ -173,11 +210,35 @@ class PSOSolver(BaseSolver):
                 location=course_template.location,
                 exam_format=course_template.exam_format,
                 note=course_template.note,
-                student_count=course_template.student_count
+                student_count=course_template.student_count,
+                is_locked=course_template.is_locked,
+                duration=course_template.duration
             )
-            new_course.assigned_date = date_val
-            new_course.assigned_time = time_val
-            new_course.assigned_room = room_val
+            
+            # ENHANCED: Kiểm tra is_locked
+            # Nếu is_locked=True và đã có lịch: Sử dụng giá trị cố định cho ngày/giờ/phòng
+            # Nhưng KHÔNG assign proctor từ template - proctor sẽ được tối ưu độc lập
+            if course_template.is_locked and course_template.is_scheduled():
+                new_course.assigned_date = course_template.assigned_date
+                new_course.assigned_time = course_template.assigned_time
+                new_course.assigned_room = course_template.assigned_room
+                # Không assign proctor - để vector tối ưu
+            else:
+                # Lấy giá trị float từ vector và ép kiểu int để ra index
+                time_idx = int(position[2*i])
+                room_idx = int(position[2*i+1])
+                
+                # Clip index để tránh lỗi out of bound (phòng ngừa)
+                time_idx = np.clip(time_idx, 0, self.num_time_slots - 1)
+                room_idx = np.clip(room_idx, 0, self.num_rooms - 1)
+                
+                # Map ngược lại dữ liệu thực
+                date_val, time_val = self.time_slots_flat[time_idx]
+                room_val = self.rooms[room_idx].room_id
+                
+                new_course.assigned_date = date_val
+                new_course.assigned_time = time_val
+                new_course.assigned_room = room_val
             
             decoded_courses.append(new_course)
             
@@ -230,6 +291,8 @@ class PSOSolver(BaseSolver):
             self._log("🔍 Đang đánh giá các hạt ban đầu...")
             for particle in swarm:
                 sched = self._decode_position_to_schedule(particle.position)
+                # Gán giám thị cho schedule này
+                self._assign_proctors_to_schedule(sched)
                 cost = self.constraint_checker.calculate_total_violation(sched)
                 
                 particle.current_value = cost
@@ -278,6 +341,8 @@ class PSOSolver(BaseSolver):
                     
                     # --- EVALUATION ---
                     current_sched = self._decode_position_to_schedule(particle.position)
+                    # Gán giám thị cho schedule này
+                    self._assign_proctors_to_schedule(current_sched)
                     current_cost = self.constraint_checker.calculate_total_violation(current_sched)
                     particle.current_value = current_cost
                     
@@ -340,6 +405,9 @@ class PSOSolver(BaseSolver):
             
             # Check feasibility
             if self.best_solution:
+                # Gán giám thị cho tất cả các môn thi nếu chưa được gán
+                self._assign_proctors_to_schedule(self.best_solution)
+                
                 if self.constraint_checker.is_feasible(self.best_solution):
                     self._log("✅ Lịch thi KHẢ THI (không vi phạm hard constraints)")
                 else:

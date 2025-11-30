@@ -3,10 +3,12 @@ Data class đại diện cho một môn học trong hệ thống xếp lịch th
 Chứa thông tin cơ bản về môn học và các thuộc tính để lưu kết quả xếp lịch.
 
 ENHANCED: Hỗ trợ chia môn học thành nhiều ca thi (sessions).
+ENHANCED: Hỗ trợ khóa cứng lịch thi (Pinning) và thời lượng thi linh hoạt.
 """
 
 from dataclasses import dataclass, field
 from typing import Optional, List
+from datetime import datetime, timedelta
 
 
 @dataclass
@@ -15,6 +17,7 @@ class Course:
     Class đại diện cho một môn học/lớp học phần.
     
     ENHANCED: Hỗ trợ chia môn học thành nhiều ca thi (sessions).
+    ENHANCED: Hỗ trợ khóa cứng lịch thi (is_locked) và thời lượng thi linh hoạt (duration).
     
     Attributes:
         course_id (str): Mã lớp học phần (định danh duy nhất).
@@ -26,13 +29,17 @@ class Course:
         assigned_date (Optional[str]): Ngày thi được phân công (None nếu chưa xếp lịch hoặc dùng sessions).
         assigned_time (Optional[str]): Giờ thi được phân công (None nếu chưa xếp lịch hoặc dùng sessions).
         assigned_room (Optional[str]): Phòng thi được phân công (None nếu chưa xếp lịch hoặc dùng sessions).
+        assigned_proctor_id (Optional[str]): ID giám thị được phân công.
         sessions (Optional[List]): Danh sách các ca thi (None nếu môn học không được chia ca).
         max_session_size (int): Số lượng sinh viên tối đa trong một ca (mặc định: 100).
+        is_locked (bool): Nếu True, thuật toán KHÔNG được thay đổi lịch của môn này (mặc định: False).
+        duration (int): Thời lượng làm bài tính bằng phút (ví dụ: 60, 90, 120). Mặc định: 90.
     
     Note:
         - Nếu sessions không None: Môn học được chia thành nhiều ca, dùng sessions để xếp lịch.
         - Nếu sessions là None: Môn học chỉ có 1 ca, dùng assigned_date/time/room như cũ (backward compatible).
         - Tổng student_count của tất cả sessions phải bằng student_count của Course.
+        - Nếu is_locked=True và đã có lịch: Lịch này sẽ được giữ nguyên trong quá trình tối ưu.
     """
     
     # Thông tin cơ bản từ dữ liệu đầu vào
@@ -54,6 +61,10 @@ class Course:
     # Hiện tại hệ thống chia thành nhiều Course objects thay vì sessions
     sessions: Optional[List] = None  # List[CourseSession] - Legacy support only
     max_session_size: int = 100  # Số lượng sinh viên tối đa trong một ca (không còn sử dụng)
+    
+    # ENHANCED: Hỗ trợ khóa cứng lịch thi và thời lượng thi
+    is_locked: bool = False  # Nếu True, lịch này KHÔNG được thay đổi bởi thuật toán
+    duration: int = 90  # Thời lượng làm bài tính bằng phút (mặc định 90 phút)
     
     def is_scheduled(self) -> bool:
         """
@@ -125,6 +136,39 @@ class Course:
         if self.sessions:
             return len(self.sessions)
         return 1
+    
+    @property
+    def start_time_obj(self) -> Optional[datetime]:
+        """
+        Tính toán thời gian bắt đầu thi dựa trên assigned_time.
+        
+        Returns:
+            Optional[datetime]: Đối tượng datetime đại diện cho thời gian bắt đầu.
+                               None nếu assigned_date hoặc assigned_time chưa xác định.
+        """
+        if self.assigned_date is None or self.assigned_time is None:
+            return None
+        try:
+            # Kết hợp ngày và giờ
+            datetime_str = f"{self.assigned_date} {self.assigned_time}"
+            return datetime.strptime(datetime_str, "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return None
+    
+    @property
+    def end_time_obj(self) -> Optional[datetime]:
+        """
+        Tính toán thời gian kết thúc thi dựa trên assigned_time và duration.
+        
+        Returns:
+            Optional[datetime]: Đối tượng datetime đại diện cho thời gian kết thúc.
+                               None nếu assigned_date hoặc assigned_time chưa xác định.
+        """
+        start_time = self.start_time_obj
+        if start_time is None:
+            return None
+        # Cộng thêm duration (tính bằng phút)
+        return start_time + timedelta(minutes=self.duration)
     
     def __str__(self) -> str:
         """

@@ -119,8 +119,17 @@ class BaseSolver(QThread, metaclass=QThreadMeta):
         self.end_time: Optional[float] = None
         self.total_iterations: int = 0
         
+        # ENHANCED: Cấu hình cho dải thời gian linh hoạt
+        self.exam_dates: List[str] = self.config.get('exam_dates', None)
+        self.daily_start_time: str = self.config.get('daily_start_time', '07:30')
+        self.daily_end_time: str = self.config.get('daily_end_time', '14:30')
+        
         # Tạo không gian tìm kiếm chung cho mọi thuật toán
-        self.available_dates = self._generate_exam_dates()
+        if self.exam_dates is None:
+            self.available_dates = self._generate_exam_dates()
+        else:
+            self.available_dates = self.exam_dates
+        
         self.available_times = self._generate_time_slots()
         
         # Validate input
@@ -235,9 +244,37 @@ class BaseSolver(QThread, metaclass=QThreadMeta):
         return self.end_time - self.start_time
     
     def _generate_exam_dates(self) -> List[str]:
-        """Tạo danh sách 14 ngày thi."""
+        """
+        Tạo danh sách ngày thi từ schedule_config hoặc mặc định.
+        
+        Returns:
+            List[str]: Danh sách ngày (format: "YYYY-MM-DD").
+        """
+        # Lấy cấu hình lịch nếu có
+        schedule_config = self.config.get('schedule_config', {})
+        
+        if schedule_config and 'start_date' in schedule_config and 'end_date' in schedule_config:
+            # Sử dụng khoảng thời gian từ config
+            start_str = schedule_config['start_date']
+            end_str = schedule_config['end_date']
+            
+            try:
+                start = datetime.strptime(start_str, "%Y-%m-%d")
+                end = datetime.strptime(end_str, "%Y-%m-%d")
+                
+                dates = []
+                current = start
+                while current <= end:
+                    dates.append(current.strftime("%Y-%m-%d"))
+                    current += timedelta(days=1)
+                
+                return dates
+            except (ValueError, KeyError, TypeError):
+                pass
+        
+        # Mặc định: 14 ngày bắt đầu từ 2025-06-01
         dates = []
-        base_date = "2025-06-01" # Ngày giả định bắt đầu thi
+        base_date = "2025-06-01"
         start = datetime.strptime(base_date, "%Y-%m-%d")
         for i in range(14):
             date = start + timedelta(days=i)
@@ -245,7 +282,17 @@ class BaseSolver(QThread, metaclass=QThreadMeta):
         return dates
     
     def _generate_time_slots(self) -> List[str]:
-        """Tạo danh sách 4 ca thi chuẩn."""
+        """
+        Tạo danh sách các ca thi trong ngày dựa trên cấu hình.
+        
+        ENHANCED: Hỗ trợ dải thời gian linh hoạt từ daily_start_time đến daily_end_time.
+        Hiện tại sử dụng danh sách cố định để tương thích với yêu cầu hiện tại.
+        
+        Returns:
+            List[str]: Danh sách giờ thi (format: "HH:MM").
+        """
+        # Sử dụng danh sách cố định hiện tại
+        # TODO: Có thể mở rộng để tính toán dựa trên daily_start_time, daily_end_time và khoảng cách
         return ["07:30", "09:30", "13:30", "15:30"]
     
     def get_statistics(self) -> Dict[str, Any]:
