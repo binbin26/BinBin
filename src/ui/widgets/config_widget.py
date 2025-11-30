@@ -1,0 +1,190 @@
+"""
+Widget cấu hình tham số cho thuật toán (SA và PSO).
+Hỗ trợ chọn thuật toán, chỉnh tham số riêng biệt và Import dữ liệu.
+"""
+
+from PyQt5.QtWidgets import (QVBoxLayout, QFormLayout, QHBoxLayout, 
+                             QStackedWidget, QWidget, QGroupBox)
+from PyQt5.QtCore import Qt, pyqtSignal
+from qfluentwidgets import (
+    CardWidget, SpinBox, DoubleSpinBox, ComboBox, 
+    StrongBodyLabel, BodyLabel, PushButton, PrimaryPushButton,
+    InfoBar, InfoBarPosition
+)
+from typing import Dict, Any
+
+
+class ConfigWidget(CardWidget):
+    """
+    Widget cấu hình tích hợp:
+    - Import dữ liệu
+    - Chọn thuật toán (SA/PSO)
+    - Cấu hình tham số tương ứng
+    """
+    
+    # Signals
+    config_changed = pyqtSignal(dict)
+    apply_clicked = pyqtSignal()
+    reset_clicked = pyqtSignal()
+    load_data_clicked = pyqtSignal()
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._init_ui()
+        self._reset_defaults()
+
+    def _init_ui(self):
+        # Main layout
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(10)
+        
+        # --- 1. HEADER & IMPORT ---
+        header_layout = QHBoxLayout()
+        title_label = StrongBodyLabel("⚙️ Cấu hình & Dữ liệu")
+        title_label.setStyleSheet("font-size: 14pt;")
+        header_layout.addWidget(title_label)
+        header_layout.addStretch()
+        main_layout.addLayout(header_layout)
+        
+        # Nút Import
+        self.load_data_btn = PushButton("📂 Import File Excel/CSV")
+        self.load_data_btn.setToolTip("Tải danh sách Môn học và Phòng thi")
+        self.load_data_btn.clicked.connect(self.load_data_clicked.emit)
+        main_layout.addWidget(self.load_data_btn)
+        
+        # Label trạng thái
+        self.data_status_label = BodyLabel("Trạng thái: Chưa có dữ liệu")
+        self.data_status_label.setStyleSheet("color: #666; font-style: italic; font-size: 9pt")
+        main_layout.addWidget(self.data_status_label)
+        
+        main_layout.addSpacing(10)
+        
+        # --- 2. ALGORITHM SELECTION ---
+        algo_group = QGroupBox("Chọn Thuật toán")
+        algo_layout = QVBoxLayout(algo_group)
+        
+        self.algo_combo = ComboBox()
+        self.algo_combo.addItems(["Simulated Annealing (SA)", "Particle Swarm Optimization (PSO)"])
+        self.algo_combo.setToolTip("Chọn thuật toán để chạy xếp lịch")
+        self.algo_combo.currentIndexChanged.connect(self._on_algo_changed)
+        algo_layout.addWidget(self.algo_combo)
+        
+        main_layout.addWidget(algo_group)
+        
+        # --- 3. PARAMETERS STACK (Trang cấu hình riêng cho từng thuật toán) ---
+        self.param_stack = QStackedWidget()
+        
+        # === Page 1: SA Parameters ===
+        self.page_sa = QWidget()
+        sa_layout = QFormLayout(self.page_sa)
+        sa_layout.setSpacing(15)
+        sa_layout.setLabelAlignment(Qt.AlignRight)
+        
+        self.sa_temp = DoubleSpinBox()
+        self.sa_temp.setRange(10, 10000); self.sa_temp.setValue(1000)
+        sa_layout.addRow(BodyLabel("Nhiệt độ (T₀):"), self.sa_temp)
+        
+        self.sa_cooling = DoubleSpinBox()
+        self.sa_cooling.setRange(0.8, 0.9999); self.sa_cooling.setDecimals(4); self.sa_cooling.setValue(0.995)
+        sa_layout.addRow(BodyLabel("Tỷ lệ làm mát (α):"), self.sa_cooling)
+        
+        self.sa_iter = SpinBox()
+        self.sa_iter.setRange(100, 1000000); self.sa_iter.setValue(5000); self.sa_iter.setSingleStep(100)
+        sa_layout.addRow(BodyLabel("Số vòng lặp tối đa:"), self.sa_iter)
+        
+        self.param_stack.addWidget(self.page_sa)
+        
+        # === Page 2: PSO Parameters ===
+        self.page_pso = QWidget()
+        pso_layout = QFormLayout(self.page_pso)
+        pso_layout.setSpacing(15)
+        pso_layout.setLabelAlignment(Qt.AlignRight)
+        
+        self.pso_swarm = SpinBox()
+        self.pso_swarm.setRange(10, 500); self.pso_swarm.setValue(50)
+        pso_layout.addRow(BodyLabel("Swarm Size (Hạt):"), self.pso_swarm)
+        
+        self.pso_iter = SpinBox()
+        self.pso_iter.setRange(100, 100000); self.pso_iter.setValue(1000)
+        pso_layout.addRow(BodyLabel("Max Iterations:"), self.pso_iter)
+        
+        self.pso_w = DoubleSpinBox() # Inertia
+        self.pso_w.setRange(0.1, 1.5); self.pso_w.setValue(0.7); self.pso_w.setSingleStep(0.1)
+        pso_layout.addRow(BodyLabel("Inertia (w):"), self.pso_w)
+        
+        self.pso_c1 = DoubleSpinBox() # Cognitive
+        self.pso_c1.setRange(0.1, 4.0); self.pso_c1.setValue(1.5); self.pso_c1.setSingleStep(0.1)
+        pso_layout.addRow(BodyLabel("Cognitive (c1):"), self.pso_c1)
+        
+        self.pso_c2 = DoubleSpinBox() # Social
+        self.pso_c2.setRange(0.1, 4.0); self.pso_c2.setValue(1.5); self.pso_c2.setSingleStep(0.1)
+        pso_layout.addRow(BodyLabel("Social (c2):"), self.pso_c2)
+        
+        self.param_stack.addWidget(self.page_pso)
+        
+        main_layout.addWidget(self.param_stack)
+        
+        # --- 4. BUTTONS ---
+        main_layout.addStretch()
+        btn_layout = QHBoxLayout()
+        
+        self.reset_btn = PushButton("🔄 Reset")
+        self.reset_btn.clicked.connect(self._reset_defaults)
+        
+        self.apply_btn = PrimaryPushButton("▶ Chạy Thuật Toán")
+        self.apply_btn.clicked.connect(self.apply_clicked.emit)
+        
+        btn_layout.addWidget(self.reset_btn)
+        btn_layout.addWidget(self.apply_btn)
+        
+        main_layout.addLayout(btn_layout)
+
+    def _on_algo_changed(self, index):
+        """Chuyển đổi giao diện tham số khi đổi thuật toán."""
+        self.param_stack.setCurrentIndex(index)
+
+    def _reset_defaults(self):
+        """Khôi phục giá trị mặc định."""
+        # SA Defaults
+        self.sa_temp.setValue(1000.0)
+        self.sa_cooling.setValue(0.995)
+        self.sa_iter.setValue(5000)
+        # PSO Defaults
+        self.pso_swarm.setValue(50)
+        self.pso_iter.setValue(1000)
+        self.pso_w.setValue(0.7)
+        self.pso_c1.setValue(1.5)
+        self.pso_c2.setValue(1.5)
+        # Reset algo
+        self.algo_combo.setCurrentIndex(0)
+
+    def get_config(self) -> Dict[str, Any]:
+        """Lấy config dựa trên thuật toán đang chọn."""
+        algo_idx = self.algo_combo.currentIndex()
+        algo_type = 'sa' if algo_idx == 0 else 'pso'
+        
+        config = {'algorithm': algo_type}
+        
+        if algo_type == 'sa':
+            config.update({
+                'initial_temperature': self.sa_temp.value(),
+                'cooling_rate': self.sa_cooling.value(),
+                'max_iterations': self.sa_iter.value(),
+                'neighbor_type': 'swap'
+            })
+        else:
+            config.update({
+                'swarm_size': int(self.pso_swarm.value()),
+                'max_iterations': int(self.pso_iter.value()),
+                'w': self.pso_w.value(),
+                'c1': self.pso_c1.value(),
+                'c2': self.pso_c2.value()
+            })
+        return config
+    
+    def set_data_status(self, text: str, is_success: bool = True):
+        """Cập nhật label trạng thái dữ liệu (Style đẹp)."""
+        self.data_status_label.setText(f"Trạng thái: {text}")
+        color = "green" if is_success else "red"
+        self.data_status_label.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 9pt")
