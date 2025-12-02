@@ -55,24 +55,24 @@ class CalendarView(QWidget):
         self._setup_ui()
     
     def _setup_ui(self) -> None:
-        """Thiết lập giao diện."""
+        """Thiết lập giao diện (Responsive)."""
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(15)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
         
         # ========== TOOLBAR ==========
         toolbar_layout = QHBoxLayout()
         toolbar_layout.setSpacing(10)
         
-        # Nút "Tuần Trước"
+        # Nút "Tuần Trước" (Responsive)
         self.prev_btn = QPushButton("◄ Tuần Trước")
-        self.prev_btn.setMinimumWidth(130)
-        self.prev_btn.setMinimumHeight(40)
+        self.prev_btn.setMinimumWidth(100)
+        self.prev_btn.setMinimumHeight(36)
         self.prev_btn.setStyleSheet("""
             QPushButton {
-                font-size: 12pt;
+                font-size: 11pt;
                 font-weight: bold;
-                padding: 8px 15px;
+                padding: 6px 12px;
                 background-color: #E3F2FD;
                 border: 2px solid #1976D2;
                 border-radius: 6px;
@@ -88,25 +88,25 @@ class CalendarView(QWidget):
         self.prev_btn.clicked.connect(self._previous_week)
         toolbar_layout.addWidget(self.prev_btn)
         
-        # Label tuần
+        # Label tuần (Responsive)
         self.week_label = QLabel("📅 Tuần: ---")
         self.week_label.setAlignment(Qt.AlignCenter)
         font = self.week_label.font()
-        font.setPointSize(14)
+        font.setPointSize(12)
         font.setBold(True)
         self.week_label.setFont(font)
-        self.week_label.setStyleSheet("color: #1565C0; padding: 10px;")
-        self.week_label.setMinimumHeight(40)
+        self.week_label.setStyleSheet("color: #1565C0; padding: 8px;")
+        self.week_label.setMinimumHeight(36)
         toolbar_layout.addWidget(self.week_label)
         
-        # ComboBox tuần
+        # ComboBox tuần (Responsive)
         self.week_combo = QComboBox()
-        self.week_combo.setMinimumWidth(300)
-        self.week_combo.setMinimumHeight(40)
+        self.week_combo.setMinimumWidth(250)
+        self.week_combo.setMinimumHeight(36)
         self.week_combo.setStyleSheet("""
             QComboBox {
-                font-size: 11pt;
-                padding: 8px;
+                font-size: 10pt;
+                padding: 6px;
                 border: 2px solid #BDBDBD;
                 border-radius: 5px;
                 background-color: #F5F5F5;
@@ -123,15 +123,15 @@ class CalendarView(QWidget):
         self.week_combo.currentIndexChanged.connect(self._on_week_selected)
         toolbar_layout.addWidget(self.week_combo)
         
-        # Nút "Tuần Sau"
+        # Nút "Tuần Sau" (Responsive)
         self.next_btn = QPushButton("Tuần Sau ►")
-        self.next_btn.setMinimumWidth(130)
-        self.next_btn.setMinimumHeight(40)
+        self.next_btn.setMinimumWidth(100)
+        self.next_btn.setMinimumHeight(36)
         self.next_btn.setStyleSheet("""
             QPushButton {
-                font-size: 12pt;
+                font-size: 11pt;
                 font-weight: bold;
-                padding: 8px 15px;
+                padding: 6px 12px;
                 background-color: #E3F2FD;
                 border: 2px solid #1976D2;
                 border-radius: 6px;
@@ -502,14 +502,17 @@ class CalendarView(QWidget):
         return text
     
     def _style_table(self) -> None:
-        """Thiết lập styling cho bảng."""
-        # Tăng kích thước cột
-        for col in range(self.table.columnCount()):
-            self.table.setColumnWidth(col, max(180, self.table.columnWidth(col)))
+        """Thiết lập styling cho bảng (Responsive)."""
+        # Responsive column width - tính dựa trên tổng chiều rộng table
+        total_width = self.table.width() if self.table.width() > 0 else 1000
+        col_width = max(120, int(total_width / max(1, self.table.columnCount())))
         
-        # Tăng chiều cao hàng
+        for col in range(self.table.columnCount()):
+            self.table.setColumnWidth(col, col_width)
+        
+        # Responsive row height - scale based on content
         for row in range(self.table.rowCount()):
-            self.table.setRowHeight(row, max(100, self.table.rowHeight(row)))
+            self.table.setRowHeight(row, 80)
         
         # Enable word wrap for all items
         for row in range(self.table.rowCount()):

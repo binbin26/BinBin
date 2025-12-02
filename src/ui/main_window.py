@@ -43,25 +43,26 @@ from src.utils.exporter import Exporter
 from src.ui.widgets.config_widget import ConfigWidget
 from src.ui.widgets.chart_widget import ChartWidget
 from src.ui.widgets.schedule_table import ScheduleResultTable
+from src.ui.widgets.data_viewer import DataViewerWidget
 
 
 class DashboardInterface(QWidget):
     """
-    Giao diện Tab Dashboard: Chứa Config và Chart.
+    Giao diện Tab Dashboard: Chứa Config và Chart (Responsive).
     """
     def __init__(self, config_widget, chart_widget, parent=None):
         super().__init__(parent)
         self.setObjectName("DashboardInterface")
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(20)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(15)
         
-        # Bên trái: Config (chiếm 30%)
-        layout.addWidget(config_widget, 3)
+        # Bên trái: Config (chiếm 35%, responsive)
+        layout.addWidget(config_widget, 35)
         
-        # Bên phải: Biểu đồ (chiếm 70%)
-        layout.addWidget(chart_widget, 7)
+        # Bên phải: Biểu đồ (chiếm 65%, responsive)
+        layout.addWidget(chart_widget, 65)
 
 
 class MainWindow(FluentWindow):
@@ -71,9 +72,14 @@ class MainWindow(FluentWindow):
     def __init__(self):
         super().__init__()
         
-        # 1. Cấu hình cửa sổ cơ bản
+        # 1. Cấu hình cửa sổ cơ bản (Responsive)
         self.setWindowTitle("AI Exam Scheduling System")
-        self.resize(1200, 800)
+        # Lấy kích thước màn hình để set default size (80% màn hình)
+        desktop = QApplication.desktop().availableGeometry()
+        default_width = int(desktop.width() * 0.8)
+        default_height = int(desktop.height() * 0.85)
+        self.resize(default_width, default_height)
+        self.setMinimumSize(1024, 640)  # Minimum size để không bị lỗi layout
         self._center_window()
 
         # Dữ liệu chính
@@ -87,6 +93,7 @@ class MainWindow(FluentWindow):
         self.config_widget = ConfigWidget()
         self.chart_widget = ChartWidget()
         self.result_table = ScheduleResultTable()
+        self.data_viewer = DataViewerWidget()  # <--- NEW: Data Viewer Widget
         
         # 3. Tạo các Interface (Trang con)
         self.dashboard_interface = DashboardInterface(
@@ -143,12 +150,19 @@ class MainWindow(FluentWindow):
     def _center_window(self):
         desktop = QApplication.desktop().availableGeometry()
         w, h = desktop.width(), desktop.height()
-        self.move(w//2 - self.width()//2, h//2 - self.height()//2)
+        self.move(max(0, w//2 - self.width()//2), max(0, h//2 - self.height()//2))
+    
+    def resizeEvent(self, event):
+        """Handle window resize to maintain proportional layouts."""
+        super().resizeEvent(event)
 
     def _init_navigation(self):
         """Thiết lập menu điều hướng."""
         self.addSubInterface(
             self.dashboard_interface, FIF.HOME, "Dashboard", NavigationItemPosition.TOP
+        )
+        self.addSubInterface(
+            self.data_viewer, FIF.INFO, "Dữ Liệu Import", NavigationItemPosition.TOP
         )
         self.addSubInterface(
             self.result_interface, FIF.CALENDAR, "Kết quả xếp lịch", NavigationItemPosition.TOP
@@ -244,6 +258,16 @@ class MainWindow(FluentWindow):
             proctor_msg = f", {len(self.proctors)} giám thị" if self.proctors else ""
             status_msg = f"Đã nạp: {len(self.courses)} môn học, {len(self.rooms)} phòng thi{proctor_msg}."
             self.config_widget.set_data_status(status_msg, is_success=True)
+            
+            # <--- NEW: Cập nhật Data Viewer
+            self.data_viewer.set_subjects_data(self.courses)
+            self.data_viewer.set_rooms_data(self.rooms)
+            self.data_viewer.set_proctors_data(self.proctors)
+            self.data_viewer.update_stats(
+                len(self.courses), 
+                len(self.rooms), 
+                len(self.proctors)
+            )
             
             InfoBar.success(
                 title="Import thành công",

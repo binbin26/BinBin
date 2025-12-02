@@ -24,6 +24,7 @@ from src.models.solution import Schedule
 from src.models.course import Course
 from src.models.room import Room
 from src.core.constraints import ConstraintChecker
+from src.core.optimization_fast import FastConstraintChecker
 
 
 class SASolver(BaseSolver):
@@ -86,6 +87,12 @@ class SASolver(BaseSolver):
             max_exams_per_week=max_exams_per_week,
             max_exams_per_day=max_exams_per_day
         )
+        
+        # OPTIMIZATION: Use FastConstraintChecker for iterations
+        self.fast_constraint_checker = FastConstraintChecker(rooms)
+        
+        # Performance optimization: max runtime in seconds (prevent hangs)
+        self.max_runtime = float(self.config.get('max_runtime', 300.0))  # 5 minutes default
         
         # Time slots và schedule parameters
         self.available_dates = self._generate_exam_dates()
@@ -491,6 +498,12 @@ class SASolver(BaseSolver):
                     self._log("⚠️ Thuật toán đã bị dừng bởi người dùng")
                     break
                 
+                # Check runtime limit
+                elapsed_time = time.time() - self.start_time
+                if elapsed_time > self.max_runtime:
+                    self._log(f"⏱️ Đạt giới hạn thời gian ({self.max_runtime}s). Dừng.")
+                    break
+                
                 iteration += 1
                 self.total_iterations = iteration
                 
@@ -498,8 +511,8 @@ class SASolver(BaseSolver):
                 backup_data = self._perturb_move(current_schedule)
                 self.total_neighbors += 1
                 
-                # Calculate new cost (sau khi đã modify)
-                new_cost = self.constraint_checker.calculate_total_violation(current_schedule)
+                # Calculate new cost (sau khi đã modify) - OPTIMIZED: use fast checker
+                new_cost = self.fast_constraint_checker.calculate_fast(current_schedule)
                 
                 # Calculate acceptance probability
                 accept_prob = self._acceptance_probability(current_cost, new_cost, temperature)
@@ -529,7 +542,10 @@ class SASolver(BaseSolver):
                 
                 # Emit signals every 10 iterations (not too frequent to avoid GUI lag)
                 if iteration % 10 == 0:
-                    self.step_signal.emit(iteration, current_cost)
+                    # Phát tín hiệu với 6 tham số đầy đủ
+                    # Định dạng: (iteration, cost, temperature, inertia, acceptance_rate, updates)
+                    acceptance_rate = (self.accepted_moves / iteration * 100) if iteration > 0 else 0
+                    self.step_signal.emit(iteration, current_cost, temperature, 0.0, acceptance_rate, 0)
                     
                     # Calculate progress (based on temperature)
                     progress = int(
@@ -551,9 +567,13 @@ class SASolver(BaseSolver):
             self.best_solution = best_schedule
             self.current_solution = current_schedule
             
+            # OPTIMIZATION: Final evaluation with full constraint checker for accurate score
+            final_cost = self.constraint_checker.calculate_total_violation(best_schedule)
+            best_schedule.fitness_score = final_cost
+            
             # Calculate statistics
             execution_time = self.get_execution_time()
-            improvement = ((self.convergence_history[0] - best_cost) / 
+            improvement = ((self.convergence_history[0] - final_cost) / 
                           self.convergence_history[0] * 100) if self.convergence_history[0] > 0 else 0
             
             # Final log
@@ -563,7 +583,8 @@ class SASolver(BaseSolver):
             self._log(f"⏱️ Thời gian thực thi: {execution_time:.2f}s")
             self._log(f"🔁 Tổng số vòng lặp: {iteration}")
             self._log(f"📊 Cost ban đầu: {self.convergence_history[0]:.2f}")
-            self._log(f"🎯 Cost tốt nhất: {best_cost:.2f}")
+            self._log(f"🎯 Cost tốt nhất (fast): {best_cost:.2f}")
+            self._log(f"🎯 Cost tốt nhất (chính xác): {final_cost:.2f}")
             self._log(f"📈 Cải thiện: {improvement:.2f}%")
             self._log(f"✔️ Accepted moves: {self.accepted_moves}")
             self._log(f"❌ Rejected moves: {self.rejected_moves}")
@@ -577,7 +598,8 @@ class SASolver(BaseSolver):
             
             # Emit điểm cuối cùng nếu chưa được emit (đảm bảo chart có dữ liệu đầy đủ)
             if iteration % 10 != 0:
-                self.step_signal.emit(iteration, best_cost)
+                acceptance_rate = (self.accepted_moves / self.total_neighbors * 100) if self.total_neighbors > 0 else 0
+                self.step_signal.emit(iteration, final_cost, temperature, 0.0, acceptance_rate, 0)
                 self._emit_progress(100, 100)
             
             # Emit finished signal

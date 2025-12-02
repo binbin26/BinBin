@@ -74,7 +74,10 @@ class BaseSolver(QThread, metaclass=QThreadMeta):
     """
     
     # Định nghĩa các signals
-    step_signal = pyqtSignal(int, float)  # (iteration, cost)
+    # step_signal có thể phát 2 hoặc 6 tham số:
+    # - 2 params: (iteration: int, cost: float)
+    # - 6 params: (iteration: int, cost: float, temperature: float, inertia: float, acceptance_rate: float, updates: int)
+    step_signal = pyqtSignal(int, float, float, float, float, int)  # All 6 params
     finished_signal = pyqtSignal(object)  # (best_schedule)
     progress_signal = pyqtSignal(int)     # (percentage: 0-100)
     log_signal = pyqtSignal(str)          # (log_message)

@@ -28,6 +28,7 @@ from src.models.solution import Schedule
 from src.models.course import Course
 from src.models.room import Room
 from src.core.constraints import ConstraintChecker
+from src.core.optimization_fast import FastConstraintChecker
 
 class Particle:
     """
@@ -105,6 +106,12 @@ class PSOSolver(BaseSolver):
             max_exams_per_week=max_exams_per_week,
             max_exams_per_day=max_exams_per_day
         )
+        
+        # OPTIMIZATION: Use FastConstraintChecker for iterations
+        self.fast_constraint_checker = FastConstraintChecker(rooms)
+        
+        # Performance optimization: max runtime in seconds (prevent hangs)
+        self.max_runtime = float(self.config.get('max_runtime', 300.0))  # 5 minutes default
         
         # Statistics
         self.gbest_updates = 0
@@ -293,7 +300,8 @@ class PSOSolver(BaseSolver):
                 sched = self._decode_position_to_schedule(particle.position)
                 # Gán giám thị cho schedule này
                 self._assign_proctors_to_schedule(sched)
-                cost = self.constraint_checker.calculate_total_violation(sched)
+                # Use fast checker for initial evaluation
+                cost = self.fast_constraint_checker.calculate_fast(sched)
                 
                 particle.current_value = cost
                 particle.pbest_value = cost
@@ -319,6 +327,12 @@ class PSOSolver(BaseSolver):
                     self._log("⚠️ Thuật toán đã bị dừng bởi người dùng")
                     break
                 
+                # Check runtime limit
+                elapsed_time = time.time() - self.start_time
+                if elapsed_time > self.max_runtime:
+                    self._log(f"⏱️ Đạt giới hạn thời gian ({self.max_runtime}s). Dừng.")
+                    break
+                
                 iteration += 1
                 self.total_iterations = iteration
                 
@@ -339,11 +353,13 @@ class PSOSolver(BaseSolver):
                     # Clip position to bounds (giữ hạt trong không gian tìm kiếm)
                     particle.position = np.clip(particle.position, self.lb, self.ub)
                     
-                    # --- EVALUATION ---
+                    # --- EVALUATION (OPTIMIZED: Use fast checker) ---
                     current_sched = self._decode_position_to_schedule(particle.position)
                     # Gán giám thị cho schedule này
                     self._assign_proctors_to_schedule(current_sched)
-                    current_cost = self.constraint_checker.calculate_total_violation(current_sched)
+                    
+                    # Use fast constraint checker for iterations (hard constraints only)
+                    current_cost = self.fast_constraint_checker.calculate_fast(current_sched)
                     particle.current_value = current_cost
                     
                     # Update PBest
@@ -367,7 +383,10 @@ class PSOSolver(BaseSolver):
                 
                 # Emit updates (mỗi 10 vòng để đỡ lag GUI)
                 if iteration % 10 == 0:
-                    self.step_signal.emit(iteration, gbest_value)
+                    # Phát tín hiệu với 6 tham số đầy đủ
+                    # Định dạng: (iteration, cost, temperature, inertia, acceptance_rate, updates)
+                    pbest_rate = (self.pbest_updates / (iteration * self.swarm_size) * 100) if iteration > 0 else 0
+                    self.step_signal.emit(iteration, gbest_value, 0.0, self.w, pbest_rate, self.gbest_updates)
                     self._emit_progress(iteration, self.max_iterations)
                 
                 # Log định kỳ (mỗi 100 vòng)
@@ -388,14 +407,23 @@ class PSOSolver(BaseSolver):
             if initial_gbest_value is not None and initial_gbest_value > 0:
                 improvement = ((initial_gbest_value - gbest_value) / initial_gbest_value * 100)
             
+            # OPTIMIZATION: Final evaluation with full constraint checker for accurate score
+            if self.best_solution:
+                self._assign_proctors_to_schedule(self.best_solution)
+                final_cost = self.constraint_checker.calculate_total_violation(self.best_solution)
+                self.best_solution.fitness_score = final_cost
+            else:
+                final_cost = gbest_value
+            
             # Final log
             self._log("=" * 60)
-            self._log("✅ HOÀN THÀNH PARTICLE SWARM OPTIMIZATION")
+            self._log("✅ HOÀN THÀNH PARTICLE SWARM OPTIMIZATION (OPTIMIZED)")
             self._log("=" * 60)
             self._log(f"⏱️ Thời gian thực thi: {execution_time:.2f}s")
             self._log(f"🔁 Tổng số vòng lặp: {iteration}")
             self._log(f"📊 Cost ban đầu: {initial_gbest_value:.2f}")
-            self._log(f"🎯 Cost tốt nhất: {gbest_value:.2f}")
+            self._log(f"🎯 Cost tốt nhất (fast): {gbest_value:.2f}")
+            self._log(f"🎯 Cost tốt nhất (chính xác): {final_cost:.2f}")
             self._log(f"📈 Cải thiện: {improvement:.2f}%")
             self._log(f"🌟 Số lần cập nhật GBest: {self.gbest_updates}")
             self._log(f"⭐ Tổng số lần cập nhật PBest: {self.pbest_updates}")
@@ -405,9 +433,6 @@ class PSOSolver(BaseSolver):
             
             # Check feasibility
             if self.best_solution:
-                # Gán giám thị cho tất cả các môn thi nếu chưa được gán
-                self._assign_proctors_to_schedule(self.best_solution)
-                
                 if self.constraint_checker.is_feasible(self.best_solution):
                     self._log("✅ Lịch thi KHẢ THI (không vi phạm hard constraints)")
                 else:
@@ -415,7 +440,8 @@ class PSOSolver(BaseSolver):
             
             # Emit điểm cuối cùng nếu chưa được emit (đảm bảo chart có dữ liệu đầy đủ)
             if iteration % 10 != 0:
-                self.step_signal.emit(iteration, gbest_value)
+                pbest_rate = (self.pbest_updates / (iteration * self.swarm_size) * 100) if iteration > 0 else 0
+                self.step_signal.emit(iteration, final_cost, 0.0, self.w, pbest_rate, self.gbest_updates)
                 self._emit_progress(100, 100)
             
             # Emit finished signal
