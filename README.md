@@ -33,6 +33,6 @@ python main.py
 ```
 
 ## Tác giả
-- Sinh viên: [Tên của bạn]
+- Sinh viên: Nguyễn Gia Bảo
 - Môn học: Trí tuệ nhân tạo
 - Năm học: 2024-2025
